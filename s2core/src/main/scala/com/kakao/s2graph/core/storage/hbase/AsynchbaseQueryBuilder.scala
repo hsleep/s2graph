@@ -18,7 +18,7 @@ import scala.util.Random
 import scala.concurrent.{ExecutionContext, Future}
 
 class AsynchbaseQueryBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionContext)
-  extends QueryBuilder[GetRequest, Deferred[QueryRequestWithResult]](storage) {
+  extends QueryBuilder[GetRequest, Deferred[QueryRequestWithResult]] {
 
   import Extensions.DeferOps
 
@@ -27,23 +27,23 @@ class AsynchbaseQueryBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionC
   val expreAfterAccess = storage.config.getInt("future.cache.expire.after.access")
 
   val futureCache = CacheBuilder.newBuilder()
-//  .recordStats()
-  .initialCapacity(maxSize)
-  .concurrencyLevel(Runtime.getRuntime.availableProcessors())
-  .expireAfterWrite(expreAfterWrite, TimeUnit.MILLISECONDS)
-  .expireAfterAccess(expreAfterAccess, TimeUnit.MILLISECONDS)
-//  .weakKeys()
-  .maximumSize(maxSize).build[java.lang.Long, (Long, Deferred[QueryRequestWithResult])]()
+    //  .recordStats()
+    .initialCapacity(maxSize)
+    .concurrencyLevel(Runtime.getRuntime.availableProcessors())
+    .expireAfterWrite(expreAfterWrite, TimeUnit.MILLISECONDS)
+    .expireAfterAccess(expreAfterAccess, TimeUnit.MILLISECONDS)
+    //  .weakKeys()
+    .maximumSize(maxSize).build[java.lang.Long, (Long, Deferred[QueryRequestWithResult])]()
 
   //  val scheduleTime = 60L * 60
-//  val scheduleTime = 60
-//  val scheduler = Executors.newScheduledThreadPool(1)
-//
-//  scheduler.scheduleAtFixedRate(new Runnable(){
-//    override def run() = {
-//      logger.info(s"[FutureCache]: ${futureCache.stats()}")
-//    }
-//  }, scheduleTime, scheduleTime, TimeUnit.SECONDS)
+  //  val scheduleTime = 60
+  //  val scheduler = Executors.newScheduledThreadPool(1)
+  //
+  //  scheduler.scheduleAtFixedRate(new Runnable(){
+  //    override def run() = {
+  //      logger.info(s"[FutureCache]: ${futureCache.stats()}")
+  //    }
+  //  }, scheduleTime, scheduleTime, TimeUnit.SECONDS)
 
   override def buildRequest(queryRequest: QueryRequest): GetRequest = {
     val srcVertex = queryRequest.vertex
@@ -228,9 +228,8 @@ class AsynchbaseQueryBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionC
       (queryRequest, prevStepScore) <- queryRequestWithScoreLs
       parentEdges <- prevStepEdges.get(queryRequest.vertex.id)
     } yield fetch(queryRequest, prevStepScore, isInnerCall = true, parentEdges)
-    
-    val grouped: Deferred[util.ArrayList[QueryRequestWithResult]] = Deferred.group(defers)
-    grouped withCallback {
+
+    Deferred.group[QueryRequestWithResult](defers) withCallback {
       queryResults: util.ArrayList[QueryRequestWithResult] =>
         queryResults.toIndexedSeq
     } toFuture

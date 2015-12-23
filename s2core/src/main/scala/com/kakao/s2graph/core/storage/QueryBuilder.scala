@@ -8,7 +8,7 @@ import scala.collection.{Map, Seq}
 import scala.concurrent.{Future, ExecutionContext}
 import scala.util.Try
 
-abstract class QueryBuilder[R, T](storage: Storage)(implicit ec: ExecutionContext) {
+trait QueryBuilder[R, T] {
 
   def buildRequest(queryRequest: QueryRequest): R
 
@@ -25,7 +25,7 @@ abstract class QueryBuilder[R, T](storage: Storage)(implicit ec: ExecutionContex
               prevStepEdges: Map[VertexId, Seq[EdgeWithScore]]): Future[Seq[QueryRequestWithResult]]
 
 
-  def fetchStep(queryRequestWithResultsLs: Seq[QueryRequestWithResult]): Future[Seq[QueryRequestWithResult]] = {
+  def fetchStep(queryRequestWithResultsLs: Seq[QueryRequestWithResult])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
     if (queryRequestWithResultsLs.isEmpty) Future.successful(Nil)
     else {
       val queryRequest = queryRequestWithResultsLs.head.queryRequest
@@ -55,7 +55,7 @@ abstract class QueryBuilder[R, T](storage: Storage)(implicit ec: ExecutionContex
 
       val prevStepTgtVertexIdEdges = for {
         (vertex, edgesWithScore) <- groupedBy
-      } yield vertex.id -> edgesWithScore.map { case (vertex, edgeWithScore) => edgeWithScore }
+      } yield vertex.id -> edgesWithScore.map { case (_, edgeWithScore) => edgeWithScore }
 
       val nextStepSrcVertices = if (prevStepLimit >= 0) {
         groupedByFiltered.toSeq.sortBy(-1 * _._2).take(prevStepLimit)
@@ -68,18 +68,18 @@ abstract class QueryBuilder[R, T](storage: Storage)(implicit ec: ExecutionContex
         queryParam <- step.queryParams
       } yield (QueryRequest(q, stepIdx, vertex, queryParam), prevStepScore)
 
-      Graph.filterEdges(fetches(queryRequests, prevStepTgtVertexIdEdges), alreadyVisited)(ec)
+      Graph.filterEdges(fetches(queryRequests, prevStepTgtVertexIdEdges), alreadyVisited)
     }
   }
 
-  def fetchStepFuture(queryRequestWithResultLsFuture: Future[Seq[QueryRequestWithResult]]): Future[Seq[QueryRequestWithResult]] = {
+  def fetchStepFuture(queryRequestWithResultLsFuture: Future[Seq[QueryRequestWithResult]])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
     for {
       queryRequestWithResultLs <- queryRequestWithResultLsFuture
       ret <- fetchStep(queryRequestWithResultLs)
     } yield ret
   }
 
-  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = {
+  def getEdges(q: Query)(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
     val fallback = {
       val queryRequest = QueryRequest(query = q, stepIdx = 0, q.vertices.head, queryParam = QueryParam.Empty)
       Future.successful(q.vertices.map(v => QueryRequestWithResult(queryRequest, QueryResult())))
@@ -97,7 +97,7 @@ abstract class QueryBuilder[R, T](storage: Storage)(implicit ec: ExecutionContex
       }
     } recover {
       case e: Exception =>
-        logger.error(s"getEdgesAsync: $e", e)
+        logger.error(s"getEdges: $e", e)
         fallback
     } get
   }

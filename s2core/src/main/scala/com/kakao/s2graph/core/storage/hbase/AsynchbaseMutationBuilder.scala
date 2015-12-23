@@ -9,7 +9,7 @@ import scala.collection.Seq
 import scala.concurrent.ExecutionContext
 
 class AsynchbaseMutationBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionContext)
-  extends MutationBuilder[HBaseRpc](storage) {
+  extends MutationBuilder[HBaseRpc] {
 
   def put(kvs: Seq[SKeyValue]): Seq[HBaseRpc] =
     kvs.map { kv => new PutRequest(kv.table, kv.row, kv.cf, kv.qualifier, kv.value, kv.timestamp) }

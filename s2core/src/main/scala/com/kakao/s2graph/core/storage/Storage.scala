@@ -3,13 +3,14 @@ package com.kakao.s2graph.core.storage
 import com.google.common.cache.Cache
 import com.kakao.s2graph.core._
 import com.kakao.s2graph.core.mysqls.Label
+import com.kakao.s2graph.core.types.LabelWithDirection
 import com.kakao.s2graph.core.utils.logger
 
 
 import scala.collection.Seq
 import scala.concurrent.{ExecutionContext, Future}
 
-abstract class Storage(implicit ec: ExecutionContext) {
+trait Storage {
 
   def cacheOpt: Option[Cache[Integer, Seq[QueryResult]]]
 
@@ -36,7 +37,7 @@ abstract class Storage(implicit ec: ExecutionContext) {
   def getVertices(vertices: Seq[Vertex]): Future[Seq[Vertex]]
 
   def mutateElements(elements: Seq[GraphElement],
-                     withWait: Boolean = false): Future[Seq[Boolean]] = {
+                     withWait: Boolean = false)(implicit ec: ExecutionContext): Future[Seq[Boolean]] = {
     val futures = elements.map {
       case edge: Edge => mutateEdge(edge, withWait)
       case vertex: Vertex => mutateVertex(vertex, withWait)
@@ -48,7 +49,7 @@ abstract class Storage(implicit ec: ExecutionContext) {
   def mutateEdge(edge: Edge, withWait: Boolean): Future[Boolean]
 
   def mutateEdges(edges: Seq[Edge],
-                  withWait: Boolean = false): Future[Seq[Boolean]] = {
+                  withWait: Boolean = false)(implicit ec: ExecutionContext): Future[Seq[Boolean]] = {
     val futures = edges.map { edge => mutateEdge(edge, withWait) }
     Future.sequence(futures)
   }
@@ -56,7 +57,7 @@ abstract class Storage(implicit ec: ExecutionContext) {
   def mutateVertex(vertex: Vertex, withWait: Boolean): Future[Boolean]
 
   def mutateVertices(vertices: Seq[Vertex],
-                     withWait: Boolean = false): Future[Seq[Boolean]] = {
+                     withWait: Boolean = false)(implicit ec: ExecutionContext): Future[Seq[Boolean]] = {
     val futures = vertices.map { vertex => mutateVertex(vertex, withWait) }
     Future.sequence(futures)
   }
@@ -66,7 +67,6 @@ abstract class Storage(implicit ec: ExecutionContext) {
   def incrementCounts(edges: Seq[Edge]): Future[Seq[(Boolean, Long)]]
 
   def flush(): Unit
-
 
   def toEdge[K: CanSKeyValue](kv: K,
                               queryParam: QueryParam,

@@ -6,7 +6,7 @@ import scala.collection.Seq
 import scala.concurrent.ExecutionContext
 
 
-abstract class MutationBuilder[T](storage: Storage)(implicit ex: ExecutionContext) {
+trait MutationBuilder[T] {
   /** operation that needs to be supported by backend persistent storage system */
   def put(kvs: Seq[SKeyValue]): Seq[T]
 

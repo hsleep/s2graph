@@ -148,7 +148,7 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
     Future.sequence(Seq(edgeFuture, vertexFuture)).map { rets => rets.forall(identity) }
   }
 
-  override def mutateEdges(edges: Seq[Edge], withWait: Boolean): Future[Seq[Boolean]] = {
+  override def mutateEdges(edges: Seq[Edge], withWait: Boolean)(implicit ec: ExecutionContext): Future[Seq[Boolean]] = {
     val edgeGrouped = edges.groupBy { edge => (edge.label, edge.srcVertex.innerId, edge.tgtVertex.innerId) } toSeq
 
     val ret = edgeGrouped.map { case ((label, srcId, tgtId), edges) =>
