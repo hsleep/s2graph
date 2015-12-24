@@ -1,7 +1,8 @@
 package com.kakao.s2graph.core.storage.hbase
 
 import java.util
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.TimeUnit
+
 import com.google.common.cache.CacheBuilder
 import com.kakao.s2graph.core._
 import com.kakao.s2graph.core.mysqls.LabelMeta
@@ -11,11 +12,12 @@ import com.kakao.s2graph.core.utils.{Extensions, logger}
 import com.stumbleupon.async.Deferred
 import org.apache.hadoop.hbase.util.Bytes
 import org.hbase.async.GetRequest
+
 import scala.annotation.tailrec
 import scala.collection.JavaConversions._
 import scala.collection.{Map, Seq}
-import scala.util.Random
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.Random
 
 class AsynchbaseQueryBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionContext)
   extends QueryBuilder[GetRequest, Deferred[QueryRequestWithResult]] {
@@ -223,7 +225,8 @@ class AsynchbaseQueryBuilder(storage: AsynchbaseStorage)(implicit ec: ExecutionC
 
 
   override def fetches(queryRequestWithScoreLs: Seq[(QueryRequest, Double)],
-                       prevStepEdges: Map[VertexId, Seq[EdgeWithScore]]): Future[Seq[QueryRequestWithResult]] = {
+                       prevStepEdges: Map[VertexId, Seq[EdgeWithScore]])
+                      (implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
     val defers: Seq[Deferred[QueryRequestWithResult]] = for {
       (queryRequest, prevStepScore) <- queryRequestWithScoreLs
       parentEdges <- prevStepEdges.get(queryRequest.vertex.id)

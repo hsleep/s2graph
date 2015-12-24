@@ -3,7 +3,7 @@ package com.kakao.s2graph.core.storage
 import com.google.common.cache.Cache
 import com.kakao.s2graph.core._
 import com.kakao.s2graph.core.mysqls.Label
-import com.kakao.s2graph.core.types.LabelWithDirection
+import com.kakao.s2graph.core.types.{VertexId, LabelWithDirection}
 import com.kakao.s2graph.core.utils.logger
 
 
@@ -30,7 +30,8 @@ trait Storage {
   def vertexDeserializer: StorageDeserializable[Vertex]
 
   // Interface
-  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]]
+  def fetches(queryRequestWithScoreLs: Seq[(QueryRequest, Double)], prevStepEdges: Map[VertexId, Seq[EdgeWithScore]])
+             (implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]]
 
   def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]]
 
@@ -62,7 +63,7 @@ trait Storage {
     Future.sequence(futures)
   }
 
-  def deleteAllAdjacentEdges(srcVertices: List[Vertex], labels: Seq[Label], dir: Int, ts: Long): Future[Boolean]
+  def deleteAllFetchedEdgesAsyncOld(queryRequestWithResult: QueryRequestWithResult, requestTs: Long, retryNum: Int): Future[Boolean]
 
   def incrementCounts(edges: Seq[Edge]): Future[Seq[(Boolean, Long)]]
 

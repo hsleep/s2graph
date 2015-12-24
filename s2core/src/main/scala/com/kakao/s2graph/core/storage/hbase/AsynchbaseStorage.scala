@@ -84,7 +84,7 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
   val indexEdgeDeserializer = new IndexEdgeDeserializable
   val vertexDeserializer = new VertexDeserializable
 
-  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = queryBuilder.getEdges(q)
+//  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = queryBuilder.getEdges(q)
 
   def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]] = {
     val futures = for {
@@ -125,7 +125,6 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
 
     Future.sequence(futures).map { result => result.toList.flatten }
   }
-
 
   def mutateEdge(edge: Edge, withWait: Boolean): Future[Boolean] = {
     //    mutateEdgeWithOp(edge, withWait)
@@ -618,9 +617,9 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
       "----------------------------------------------").mkString("\n")
   }
 
-  private def deleteAllFetchedEdgesAsyncOld(queryRequestWithResult: QueryRequestWithResult,
-                                            requestTs: Long,
-                                            retryNum: Int): Future[Boolean] = {
+  def deleteAllFetchedEdgesAsyncOld(queryRequestWithResult: QueryRequestWithResult,
+                                    requestTs: Long,
+                                    retryNum: Int): Future[Boolean] = {
     val (queryRequest, queryResult) = QueryRequestWithResult.unapply(queryRequestWithResult).get
     val queryParam = queryRequest.queryParam
     val zkQuorum = queryParam.label.hbaseZkAddr
@@ -643,101 +642,14 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
     Future.sequence(futures).map { rets => rets.forall(identity) }
   }
 
-  private def buildEdgesToDelete(queryRequestWithResultLs: QueryRequestWithResult, requestTs: Long): QueryResult = {
-    val (queryRequest, queryResult) = QueryRequestWithResult.unapply(queryRequestWithResultLs).get
-    val edgeWithScoreLs = queryResult.edgeWithScoreLs.filter { edgeWithScore =>
-      (edgeWithScore.edge.ts < requestTs) && !edgeWithScore.edge.isDegree
-    }.map { edgeWithScore =>
-      val label = queryRequest.queryParam.label
-      val newPropsWithTs = edgeWithScore.edge.propsWithTs ++
-        Map(LabelMeta.timeStampSeq -> InnerValLikeWithTs.withLong(requestTs, requestTs, label.schemaVersion))
-      val copiedEdge = edgeWithScore.edge.copy(op = GraphUtil.operations("delete"), version = requestTs,
-        propsWithTs = newPropsWithTs)
-      edgeWithScore.copy(edge = copiedEdge)
-    }
-    queryResult.copy(edgeWithScoreLs = edgeWithScoreLs)
-  }
-
-  private def deleteAllFetchedEdgesLs(queryRequestWithResultLs: Seq[QueryRequestWithResult], requestTs: Long): Future[(Boolean, Boolean)] = {
-    val queryResultLs = queryRequestWithResultLs.map(_.queryResult)
-    queryResultLs.foreach { queryResult =>
-      if (queryResult.isFailure) throw new RuntimeException("fetched result is fallback.")
-    }
-
-    val futures = for {
-      queryRequestWithResult <- queryRequestWithResultLs
-      (queryRequest, queryResult) = QueryRequestWithResult.unapply(queryRequestWithResult).get
-      deleteQueryResult = buildEdgesToDelete(queryRequestWithResult, requestTs)
-      if deleteQueryResult.edgeWithScoreLs.nonEmpty
-    } yield {
-      val label = queryRequest.queryParam.label
-      label.schemaVersion match {
-        case HBaseType.VERSION3 if label.consistencyLevel == "strong" =>
-
-          /**
-            * read: snapshotEdge on queryResult = O(N)
-            * write: N x (relatedEdges x indices(indexedEdge) + 1(snapshotEdge))
-            */
-          mutateEdges(deleteQueryResult.edgeWithScoreLs.map(_.edge), withWait = true).map { rets => rets.forall(identity) }
-        case _ =>
-
-          /**
-            * read: x
-            * write: N x ((1(snapshotEdge) + 2(1 for incr, 1 for delete) x indices)
-            */
-          deleteAllFetchedEdgesAsyncOld(queryRequestWithResult, requestTs, MaxRetryNum)
-      }
-    }
-    if (futures.isEmpty) {
-      // all deleted.
-      Future.successful(true -> true)
-    } else {
-      Future.sequence(futures).map { rets => false -> rets.forall(identity) }
-    }
-  }
-
-  def fetchAndDeleteAll(query: Query, requestTs: Long): Future[(Boolean, Boolean)] = {
-    val future = for {
-      queryRequestWithResultLs <- getEdges(query)
-      (allDeleted, ret) <- deleteAllFetchedEdgesLs(queryRequestWithResultLs, requestTs)
-    } yield {
-      (allDeleted, ret)
-    }
-    Extensions.retryOnFailure(MaxRetryNum) {
-      future
-    } {
-      logger.error(s"fetch and deleteAll failed.")
-      (true, false)
-    }
-
-  }
-
-  def deleteAllAdjacentEdges(srcVertices: List[Vertex],
-                             labels: Seq[Label],
-                             dir: Int,
-                             ts: Long): Future[Boolean] = {
-    val requestTs = ts
-    val queryParams = for {
-      label <- labels
-    } yield {
-      val labelWithDir = LabelWithDirection(label.id.get, dir)
-      QueryParam(labelWithDir).limit(0, DeleteAllFetchSize).duplicatePolicy(Option(Query.DuplicatePolicy.Raw))
-    }
-
-    val step = Step(queryParams.toList)
-    val q = Query(srcVertices, Vector(step))
-
-    //    Extensions.retryOnSuccessWithBackoff(MaxRetryNum, Random.nextInt(MaxBackOff) + 1) {
-    Extensions.retryOnSuccess(MaxRetryNum) {
-      fetchAndDeleteAll(q, requestTs)
-    } { case (allDeleted, deleteSuccess) =>
-      allDeleted && deleteSuccess
-    }.map { case (allDeleted, deleteSuccess) => allDeleted && deleteSuccess }
-  }
-
   def flush(): Unit = clients.foreach { client =>
     val timeout = Duration((clientFlushInterval + 10) * 20, duration.MILLISECONDS)
     Await.result(client.flush().toFuture, timeout)
   }
 
+  // Interface
+  def fetches(queryRequestWithScoreLs: scala.Seq[(QueryRequest, Double)],
+                       prevStepEdges: Map[VertexId, scala.Seq[EdgeWithScore]])
+                      (implicit ec: ExecutionContext): Future[scala.Seq[QueryRequestWithResult]] =
+    queryBuilder.fetches(queryRequestWithScoreLs, prevStepEdges)
 }

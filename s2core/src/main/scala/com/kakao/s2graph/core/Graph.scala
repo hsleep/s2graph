@@ -9,7 +9,7 @@ import com.kakao.s2graph.core.parsers.WhereParser
 import com.kakao.s2graph.core.storage.Storage
 import com.kakao.s2graph.core.storage.hbase._
 import com.kakao.s2graph.core.types._
-import com.kakao.s2graph.core.utils.logger
+import com.kakao.s2graph.core.utils.{Extensions, logger}
 import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.collection.JavaConversions._
@@ -318,6 +318,9 @@ class Graph(_config: Config)(implicit ec: ExecutionContext) {
 //  val cache = CacheBuilder.newBuilder().maximumSize(cacheSize).build[java.lang.Integer, Seq[QueryResult]]()
   val vertexCache = CacheBuilder.newBuilder().maximumSize(cacheSize).build[java.lang.Integer, Option[Vertex]]()
 
+  val MaxRetryNum = config.getInt("max.retry.number")
+  val DeleteAllFetchSize = config.getInt("delete.all.fetch.size")
+
   Model.apply(config)
   Model.loadCache()
 
@@ -332,13 +335,176 @@ class Graph(_config: Config)(implicit ec: ExecutionContext) {
   /** select */
   def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]] = storage.checkEdges(params)
 
-  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = storage.getEdges(q)
+  def fetchStep(queryRequestWithResultsLs: Seq[QueryRequestWithResult])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
+    if (queryRequestWithResultsLs.isEmpty) Future.successful(Nil)
+    else {
+      val queryRequest = queryRequestWithResultsLs.head.queryRequest
+      val q = queryRequest.query
+      val queryResultsLs = queryRequestWithResultsLs.map(_.queryResult)
+
+      val stepIdx = queryRequest.stepIdx + 1
+
+      val prevStepOpt = if (stepIdx > 0) Option(q.steps(stepIdx - 1)) else None
+      val prevStepThreshold = prevStepOpt.map(_.nextStepScoreThreshold).getOrElse(QueryParam.DefaultThreshold)
+      val prevStepLimit = prevStepOpt.map(_.nextStepLimit).getOrElse(-1)
+      val step = q.steps(stepIdx)
+      val alreadyVisited =
+        if (stepIdx == 0) Map.empty[(LabelWithDirection, Vertex), Boolean]
+        else Graph.alreadyVisitedVertices(queryResultsLs)
+
+      val groupedBy = queryResultsLs.flatMap { queryResult =>
+        queryResult.edgeWithScoreLs.map { case edgeWithScore =>
+          edgeWithScore.edge.tgtVertex -> edgeWithScore
+        }
+      }.groupBy { case (vertex, edgeWithScore) => vertex }
+
+      val groupedByFiltered = for {
+        (vertex, edgesWithScore) <- groupedBy
+        aggregatedScore = edgesWithScore.map(_._2.score).sum if aggregatedScore >= prevStepThreshold
+      } yield vertex -> aggregatedScore
+
+      val prevStepTgtVertexIdEdges = for {
+        (vertex, edgesWithScore) <- groupedBy
+      } yield vertex.id -> edgesWithScore.map { case (_, edgeWithScore) => edgeWithScore }
+
+      val nextStepSrcVertices = if (prevStepLimit >= 0) {
+        groupedByFiltered.toSeq.sortBy(-1 * _._2).take(prevStepLimit)
+      } else {
+        groupedByFiltered.toSeq
+      }
+
+      val queryRequests = for {
+        (vertex, prevStepScore) <- nextStepSrcVertices
+        queryParam <- step.queryParams
+      } yield (QueryRequest(q, stepIdx, vertex, queryParam), prevStepScore)
+
+      Graph.filterEdges(storage.fetches(queryRequests, prevStepTgtVertexIdEdges), alreadyVisited)
+    }
+  }
+
+  def fetchStepFuture(queryRequestWithResultLsFuture: Future[Seq[QueryRequestWithResult]])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
+    for {
+      queryRequestWithResultLs <- queryRequestWithResultLsFuture
+      ret <- fetchStep(queryRequestWithResultLs)
+    } yield ret
+  }
+
+  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = {
+    val fallback = {
+      val queryRequest = QueryRequest(query = q, stepIdx = 0, q.vertices.head, queryParam = QueryParam.Empty)
+      Future.successful(q.vertices.map(v => QueryRequestWithResult(queryRequest, QueryResult())))
+    }
+    Try {
+      if (q.steps.isEmpty) {
+        // TODO: this should be get vertex query.
+        fallback
+      } else {
+        // current stepIdx = -1
+        val startQueryResultLs = QueryResult.fromVertices(q)
+        q.steps.foldLeft(Future.successful(startQueryResultLs)) { case (acc, step) =>
+          fetchStepFuture(acc)
+        }
+      }
+    } recover {
+      case e: Exception =>
+        logger.error(s"getEdges: $e", e)
+        fallback
+    } get
+  }
 
   def getVertices(vertices: Seq[Vertex]): Future[Seq[Vertex]] = storage.getVertices(vertices)
 
   /** write */
-  def deleteAllAdjacentEdges(srcVertices: List[Vertex], labels: Seq[Label], dir: Int, ts: Long): Future[Boolean] =
-    storage.deleteAllAdjacentEdges(srcVertices, labels, dir, ts)
+  private def buildEdgesToDelete(queryRequestWithResultLs: QueryRequestWithResult, requestTs: Long): QueryResult = {
+    val (queryRequest, queryResult) = QueryRequestWithResult.unapply(queryRequestWithResultLs).get
+    val edgeWithScoreLs = queryResult.edgeWithScoreLs.filter { edgeWithScore =>
+      (edgeWithScore.edge.ts < requestTs) && !edgeWithScore.edge.isDegree
+    }.map { edgeWithScore =>
+      val label = queryRequest.queryParam.label
+      val newPropsWithTs = edgeWithScore.edge.propsWithTs ++
+        Map(LabelMeta.timeStampSeq -> InnerValLikeWithTs.withLong(requestTs, requestTs, label.schemaVersion))
+      val copiedEdge = edgeWithScore.edge.copy(op = GraphUtil.operations("delete"), version = requestTs,
+        propsWithTs = newPropsWithTs)
+      edgeWithScore.copy(edge = copiedEdge)
+    }
+    queryResult.copy(edgeWithScoreLs = edgeWithScoreLs)
+  }
+
+  private def deleteAllFetchedEdgesLs(queryRequestWithResultLs: Seq[QueryRequestWithResult], requestTs: Long): Future[(Boolean, Boolean)] = {
+    val queryResultLs = queryRequestWithResultLs.map(_.queryResult)
+    queryResultLs.foreach { queryResult =>
+      if (queryResult.isFailure) throw new RuntimeException("fetched result is fallback.")
+    }
+
+    val futures = for {
+      queryRequestWithResult <- queryRequestWithResultLs
+      (queryRequest, queryResult) = QueryRequestWithResult.unapply(queryRequestWithResult).get
+      deleteQueryResult = buildEdgesToDelete(queryRequestWithResult, requestTs)
+      if deleteQueryResult.edgeWithScoreLs.nonEmpty
+    } yield {
+      val label = queryRequest.queryParam.label
+      label.schemaVersion match {
+        case HBaseType.VERSION3 if label.consistencyLevel == "strong" =>
+
+          /**
+            * read: snapshotEdge on queryResult = O(N)
+            * write: N x (relatedEdges x indices(indexedEdge) + 1(snapshotEdge))
+            */
+          mutateEdges(deleteQueryResult.edgeWithScoreLs.map(_.edge), withWait = true).map { rets => rets.forall(identity) }
+        case _ =>
+
+          /**
+            * read: x
+            * write: N x ((1(snapshotEdge) + 2(1 for incr, 1 for delete) x indices)
+            */
+          storage.deleteAllFetchedEdgesAsyncOld(queryRequestWithResult, requestTs, MaxRetryNum)
+      }
+    }
+    if (futures.isEmpty) {
+      // all deleted.
+      Future.successful(true -> true)
+    } else {
+      Future.sequence(futures).map { rets => false -> rets.forall(identity) }
+    }
+  }
+
+  def fetchAndDeleteAll(query: Query, requestTs: Long): Future[(Boolean, Boolean)] = {
+    val future = for {
+      queryRequestWithResultLs <- getEdges(query)
+      (allDeleted, ret) <- deleteAllFetchedEdgesLs(queryRequestWithResultLs, requestTs)
+    } yield {
+      (allDeleted, ret)
+    }
+    Extensions.retryOnFailure(MaxRetryNum) {
+      future
+    } {
+      logger.error(s"fetch and deleteAll failed.")
+      (true, false)
+    }
+
+  }
+
+  def deleteAllAdjacentEdges(srcVertices: List[Vertex],
+                             labels: Seq[Label],
+                             dir: Int,
+                             ts: Long): Future[Boolean] = {
+    val requestTs = ts
+    val queryParams = for {
+      label <- labels
+    } yield {
+      val labelWithDir = LabelWithDirection(label.id.get, dir)
+      QueryParam(labelWithDir).limit(0, DeleteAllFetchSize).duplicatePolicy(Option(Query.DuplicatePolicy.Raw))
+    }
+
+    val step = Step(queryParams.toList)
+    val q = Query(srcVertices, Vector(step))
+
+    Extensions.retryOnSuccess(MaxRetryNum) {
+      fetchAndDeleteAll(q, requestTs)
+    } { case (allDeleted, deleteSuccess) =>
+      allDeleted && deleteSuccess
+    }.map { case (allDeleted, deleteSuccess) => allDeleted && deleteSuccess }
+  }
 
   def mutateElements(elements: Seq[GraphElement], withWait: Boolean = false): Future[Seq[Boolean]] =
     storage.mutateElements(elements, withWait)
