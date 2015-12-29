@@ -3,9 +3,11 @@ package com.kakao.s2graph.rest
 import java.util.concurrent.Executors
 
 import actors.QueueActor
+import com.google.common.cache.CacheBuilder
 import com.kakao.s2graph.core.rest.{RestCaller, RequestParser}
+import com.kakao.s2graph.core.storage.hbase.AsynchbaseStorage
 import com.kakao.s2graph.core.utils.logger
-import com.kakao.s2graph.core.{ExceptionHandler, Graph}
+import com.kakao.s2graph.core.{Vertex, ExceptionHandler, Graph}
 import config.Config
 import controllers.{AdminController, ApplicationController}
 import play.api.Application

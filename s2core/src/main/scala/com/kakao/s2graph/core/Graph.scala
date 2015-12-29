@@ -312,11 +312,11 @@ object Graph {
   } get
 }
 
-class Graph(_config: Config)(implicit ec: ExecutionContext) {
+class Graph(_config: Config, val storage: Storage)(implicit ec: ExecutionContext) {
   val config = _config.withFallback(Graph.DefaultConfig)
-  val cacheSize = config.getInt("cache.max.size")
+//  val cacheSize = config.getInt("cache.max.size")
 //  val cache = CacheBuilder.newBuilder().maximumSize(cacheSize).build[java.lang.Integer, Seq[QueryResult]]()
-  val vertexCache = CacheBuilder.newBuilder().maximumSize(cacheSize).build[java.lang.Integer, Option[Vertex]]()
+//  val vertexCache = CacheBuilder.newBuilder().maximumSize(cacheSize).build[java.lang.Integer, Option[Vertex]]()
 
   val MaxRetryNum = config.getInt("max.retry.number")
   val DeleteAllFetchSize = config.getInt("delete.all.fetch.size")
@@ -325,12 +325,16 @@ class Graph(_config: Config)(implicit ec: ExecutionContext) {
   Model.loadCache()
 
   // TODO: Make storage client by config param
-  val storage: Storage = new AsynchbaseStorage(config, vertexCache)(ec)
+//  val storage: Storage = new AsynchbaseStorage(config, vertexCache)(ec)
 
   for {
     entry <- config.entrySet() if Graph.DefaultConfigs.contains(entry.getKey)
     (k, v) = (entry.getKey, entry.getValue)
   } logger.info(s"[Initialized]: $k, ${this.config.getAnyRef(k)}")
+
+  def this(_config: Config)(implicit ec: ExecutionContext) {
+    this(_config, new AsynchbaseStorage(_config.withFallback(Graph.DefaultConfig), CacheBuilder.newBuilder().maximumSize(_config.withFallback(Graph.DefaultConfig).getInt("cache.max.size")).build[java.lang.Integer, Option[Vertex]]())(ec))(ec)
+  }
 
   /** select */
   def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]] = storage.checkEdges(params)

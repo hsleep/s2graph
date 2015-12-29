@@ -86,7 +86,7 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
 
 //  def getEdges(q: Query): Future[Seq[QueryRequestWithResult]] = queryBuilder.getEdges(q)
 
-  def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]] = {
+  def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = {
     val futures = for {
       (srcVertex, tgtVertex, queryParam) <- params
     } yield queryBuilder.getEdge(srcVertex, tgtVertex, queryParam, false).toFuture
@@ -126,7 +126,7 @@ class AsynchbaseStorage(val config: Config, vertexCache: Cache[Integer, Option[V
     Future.sequence(futures).map { result => result.toList.flatten }
   }
 
-  def mutateEdge(edge: Edge, withWait: Boolean): Future[Boolean] = {
+  def mutateEdge(edge: Edge, withWait: Boolean)(implicit ec: ExecutionContext): Future[Boolean] = {
     //    mutateEdgeWithOp(edge, withWait)
     val strongConsistency = edge.label.consistencyLevel == "strong"
     val edgeFuture =

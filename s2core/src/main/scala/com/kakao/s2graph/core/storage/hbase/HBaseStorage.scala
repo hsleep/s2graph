@@ -14,7 +14,7 @@ import scala.concurrent.{ExecutionContext, Future}
 /**
   * Created by hsleep on 2015. 12. 23..
   */
-class HBaseStorage(config: Config)(implicit ex: ExecutionContext) extends Storage {
+class HBaseStorage(config: Config) extends Storage {
   val cacheOpt: Option[Cache[Integer, Seq[QueryResult]]] = None
 
   val vertexCacheOpt: Option[Cache[Integer, Option[Vertex]]] = None
@@ -42,7 +42,7 @@ class HBaseStorage(config: Config)(implicit ex: ExecutionContext) extends Storag
     fetch(queryRequest, 1.0, isInnerCall = true, parentEdges = Nil)
   }
 
-  override def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]] = Future.sequence {
+  override def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]] = Future.sequence {
     for {
       (srcVertex, tgtVertex, queryParam) <- params
     } yield getEdge(srcVertex, tgtVertex, queryParam)
@@ -149,7 +149,7 @@ class HBaseStorage(config: Config)(implicit ex: ExecutionContext) extends Storag
                                checkConsistency: Boolean,
                                withWait: Boolean)(f: (Option[Edge], Seq[Edge]) => (Edge, EdgeMutate)): Future[Boolean] = ???
 
-  override def mutateEdge(edge: Edge, withWait: Boolean): Future[Boolean] = {
+  override def mutateEdge(edge: Edge, withWait: Boolean)(implicit ec: ExecutionContext): Future[Boolean] = {
     val strongConsistency = edge.label.consistencyLevel == "strong"
     val edgeFuture =
       if (edge.op == GraphUtil.operations("delete") && !strongConsistency) {

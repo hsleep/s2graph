@@ -33,7 +33,7 @@ trait Storage {
   def fetches(queryRequestWithScoreLs: Seq[(QueryRequest, Double)], prevStepEdges: Map[VertexId, Seq[EdgeWithScore]])
              (implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]]
 
-  def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)]): Future[Seq[QueryRequestWithResult]]
+  def checkEdges(params: Seq[(Vertex, Vertex, QueryParam)])(implicit ec: ExecutionContext): Future[Seq[QueryRequestWithResult]]
 
   def getVertices(vertices: Seq[Vertex]): Future[Seq[Vertex]]
 
@@ -47,7 +47,7 @@ trait Storage {
     Future.sequence(futures)
   }
 
-  def mutateEdge(edge: Edge, withWait: Boolean): Future[Boolean]
+  def mutateEdge(edge: Edge, withWait: Boolean)(implicit ec: ExecutionContext): Future[Boolean]
 
   def mutateEdges(edges: Seq[Edge],
                   withWait: Boolean = false)(implicit ec: ExecutionContext): Future[Seq[Boolean]] = {
