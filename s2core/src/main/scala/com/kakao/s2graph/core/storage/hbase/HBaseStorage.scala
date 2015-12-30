@@ -35,7 +35,8 @@ class HBaseStorage(config: Config) extends Storage {
 
   val vertexDeserializer: StorageDeserializable[Vertex] = new VertexDeserializable
 
-  private def getEdge(srcVertex: Vertex, tgtVertex: Vertex, queryParam: QueryParam): Future[QueryRequestWithResult] = {
+  private def getEdge(srcVertex: Vertex, tgtVertex: Vertex, queryParam: QueryParam)
+                     (implicit ec: ExecutionContext): Future[QueryRequestWithResult] = {
     val _queryParam = queryParam.tgtVertexInnerIdOpt(Option(tgtVertex.innerId))
     val q = Query.toQuery(Seq(srcVertex), _queryParam)
     val queryRequest = QueryRequest(q, 0, srcVertex, _queryParam)
@@ -174,7 +175,10 @@ class HBaseStorage(config: Config) extends Storage {
 
   override def mutateVertex(vertex: Vertex, withWait: Boolean): Future[Boolean] = throw new UnsupportedOperationException
 
-  private def fetch(queryRequest: QueryRequest, prevStepScore: Double, isInnerCall: Boolean, parentEdges: Seq[EdgeWithScore]): Future[QueryRequestWithResult] = ???
+  private def fetch(queryRequest: QueryRequest, prevStepScore: Double, isInnerCall: Boolean, parentEdges: Seq[EdgeWithScore])
+                   (implicit ec: ExecutionContext): Future[QueryRequestWithResult] = Future.successful {
+    QueryRequestWithResult(queryRequest, QueryResult())
+  }
 
   // Interface
   override def fetches(queryRequestWithScoreLs: Seq[(QueryRequest, Double)], prevStepEdges: Map[VertexId, Seq[EdgeWithScore]])
