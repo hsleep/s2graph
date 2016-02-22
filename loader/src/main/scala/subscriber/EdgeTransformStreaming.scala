@@ -4,7 +4,7 @@ import com.kakao.s2graph.EdgeTransform
 import com.kakao.s2graph.client.RestClient
 import com.kakao.s2graph.core.mysqls.Model
 import com.kakao.s2graph.core.utils.Configuration._
-import com.kakao.s2graph.core.{Graph, GraphConfig, GraphUtil}
+import com.kakao.s2graph.core.{GraphConfig, GraphUtil}
 import kafka.serializer.StringDecoder
 import org.apache.spark.streaming.Durations._
 import org.apache.spark.streaming.kafka.HasOffsetRanges
@@ -13,7 +13,6 @@ import s2.spark.{HashMapParam, SparkApp}
 
 import scala.collection.mutable.{HashMap => MutableHashMap}
 import scala.concurrent.ExecutionContext
-import scala.util.Try
 
 /**
   * Created by hsleep(honeysleep@gmail.com) on 2015. 12. 8..
@@ -76,10 +75,7 @@ object EdgeTransformStreaming extends SparkApp {
           val orgEdges = for {
             (k, v) <- part
             line <- GraphUtil.parseString(v)
-            maybeEdge <- Try {
-              Graph.toEdge(line)
-            }.toOption
-            edge <- maybeEdge
+            edge <- transformer.validateEdge(line)
           } yield edge
 
           // transform and send edges to graph

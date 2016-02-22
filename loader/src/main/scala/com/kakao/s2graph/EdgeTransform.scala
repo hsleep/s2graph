@@ -3,7 +3,7 @@ package com.kakao.s2graph
 import com.kakao.s2graph.client._
 import com.kakao.s2graph.core.mysqls.EtlParam.EtlType
 import com.kakao.s2graph.core.mysqls._
-import com.kakao.s2graph.core.{Edge, GraphUtil, Management}
+import com.kakao.s2graph.core.{Edge, Graph, GraphUtil, Management}
 import org.slf4j.LoggerFactory
 import play.api.libs.json._
 
@@ -18,6 +18,29 @@ class EdgeTransform(rest: RestClient, readOnlyRest: RestClient) {
   val logger = LoggerFactory.getLogger(getClass)
 
   val experimentRest = RestClient()
+
+  private def validateTS(line: String): Try[String] = Try {
+    line.split('\t') match {
+      case sp if sp(0).toLong < Int.MaxValue =>
+        sp.update(0, (sp(0).toLong * 1000).toString)
+        sp.mkString("\t")
+      case _ => line
+    }
+  }.recover {
+    case e: Exception =>
+      logger.error(s"$e: $line")
+      throw e
+  }
+
+  def validateEdge(line: String): Option[Edge] = {
+    for {
+      validLine <- validateTS(line).toOption
+      maybeEdge <- Try {
+        Graph.toGraphElement(validLine).collect { case e: Edge => e }
+      }.toOption
+      edge <- maybeEdge
+    } yield edge
+  }
 
   def transformEdge(edge: Edge)(implicit ec: ExecutionContext): Seq[Edge] = {
     transformEdges(Seq(edge))
@@ -57,7 +80,7 @@ class EdgeTransform(rest: RestClient, readOnlyRest: RestClient) {
           )
         }
       }
-    }.map(s => s.collect { case t: Success[Edge] => t.get } )
+    }.map(s => s.collect { case t: Success[Edge] => t.get })
 
     Await.result(future, 10.seconds)
   }
@@ -147,7 +170,9 @@ class EdgeTransform(rest: RestClient, readOnlyRest: RestClient) {
     for {
       bucket <- Bucket.findById(bucketId)
       experiment <- Experiment.findById(bucket.experimentId)
-      service <- Try { Service.findById(experiment.serviceId) }.toOption
+      service <- Try {
+        Service.findById(experiment.serviceId)
+      }.toOption
     } yield ExperimentRequest(service.accessToken, experiment.name, uuid, payload)
   } match {
     case Some(req) => readOnlyRest.post(req).map(_.json)
@@ -163,7 +188,7 @@ class EdgeTransform(rest: RestClient, readOnlyRest: RestClient) {
   private def runQuery(payload: JsValue): Future[JsValue] = ???
 
   private[s2graph] def extractTargetVertex(js: JsValue): JsResult[String] = {
-    ((js \ "results")(0) \ "to").validate[JsValue].flatMap {
+    ((js \ "results") (0) \ "to").validate[JsValue].flatMap {
       case JsString(s) => JsSuccess(s)
       case JsNumber(n) => JsSuccess(n.toString())
       case _ => JsError("Unsupported vertex type")
@@ -171,6 +196,6 @@ class EdgeTransform(rest: RestClient, readOnlyRest: RestClient) {
   }
 
   private[s2graph] def extractProps(js: JsValue): JsResult[JsObject] = {
-    ((js \ "results")(0) \ "props").validate[JsObject]
+    ((js \ "results") (0) \ "props").validate[JsObject]
   }
 }
