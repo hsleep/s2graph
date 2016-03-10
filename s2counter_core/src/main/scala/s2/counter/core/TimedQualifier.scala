@@ -10,7 +10,7 @@ case class TimedQualifier(q: TimedQualifier.IntervalUnit.Value, ts: Long) {
   import TimedQualifier.IntervalUnit._
 
   def dateTime: Long = {
-    val dateFormat = new SimpleDateFormat("yyyyMMddHHmm")
+    val dateFormat = new SimpleDateFormat(TimedQualifier.DateFormatStr)
     dateFormat.format(ts).toLong
   }
 
@@ -33,6 +33,8 @@ case class TimedQualifier(q: TimedQualifier.IntervalUnit.Value, ts: Long) {
 }
 
 object TimedQualifier {
+  val DateFormatStr = "yyyyMMddHHmm"
+
   object IntervalUnit extends Enumeration {
     type IntervalUnit = Value
     val TOTAL = Value("t")
@@ -85,6 +87,23 @@ object TimedQualifier {
         case TOTAL => 0L
       }
       TimedQualifier(interval, ts)
+    }
+  }
+
+  val intervalPattern = """(\d*)(\S)""".r
+  def getQualifiersExtend(intervals: Seq[String], millis: Long): Seq[TimedQualifier] = {
+    val tuples = intervals.map { case intervalPattern(count, interval) =>
+      (if (count.isEmpty) 1 else count.toInt) -> interval
+    }
+
+    // special case for minutely counter
+    getQualifiers(tuples.map(t => IntervalUnit.withName(t._2)), millis).zip(tuples.map(_._1)).map { case (tq, count) =>
+      tq.q match {
+        case MINUTELY =>
+          val newTs = new SimpleDateFormat(DateFormatStr).parse(((tq.dateTime / count) * count).toString).getTime
+          tq.copy(ts = newTs)
+        case _ => tq
+      }
     }
   }
 

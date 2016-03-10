@@ -1,5 +1,6 @@
 package s2.counter.stream
 
+import com.kakao.s2graph.core.Graph
 import com.kakao.s2graph.core.mysqls.Label
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.{SparkConf, SparkContext}
@@ -57,7 +58,9 @@ class RankingCounterStreamingSpec extends FlatSpec with BeforeAndAfterAll with M
     admin.setupCounterOnGraph()
 
     // create test_case label
-    com.kakao.s2graph.core.Management.createService(service, s2config.HBASE_ZOOKEEPER_QUORUM, s"${service}_dev", 1, None, "gz")
+    val graph = new Graph(S2ConfigFactory.config)
+    val management = new com.kakao.s2graph.core.Management(graph)
+    management.createService(service, s2config.HBASE_ZOOKEEPER_QUORUM, s"${service}_dev", 1, None, "gz")
     if (Label.findByName(action, useCache = false).isEmpty) {
       val strJs =
         s"""

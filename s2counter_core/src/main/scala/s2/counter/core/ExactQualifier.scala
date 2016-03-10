@@ -59,6 +59,14 @@ object ExactQualifier {
     }
   }
 
+  def getQualifiersExtend(intervals: Seq[String], ts: Long, dimKeyValues: Map[String, String]): Seq[ExactQualifier] = {
+    for {
+      tq <- TimedQualifier.getQualifiersExtend(intervals, ts)
+    } yield {
+      ExactQualifier(tq, dimKeyValues, makeDimensionStr(dimKeyValues))
+    }
+  }
+
   def strToDimensionMap(dimension: String): Map[String, String] = {
     val dimSp = {
       val sp = dimension.split('.')

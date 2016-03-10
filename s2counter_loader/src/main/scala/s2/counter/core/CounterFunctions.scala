@@ -4,7 +4,7 @@ import com.kakao.s2graph.core.GraphUtil
 import kafka.producer.KeyedMessage
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{Accumulable, Logging}
-import play.api.libs.json.{JsString, JsNumber, JsValue, Json}
+import play.api.libs.json.{JsNumber, JsString, JsValue, Json}
 import s2.config.{S2ConfigFactory, StreamingConfig}
 import s2.counter.TrxLog
 import s2.counter.core.ExactCounter.ExactValueMap
@@ -43,7 +43,7 @@ object CounterFunctions extends Logging with WithKafka {
     for {
       dimKeys <- policy.dimensionList
       dimValues <- getDimensionValues(item.dimension, dimKeys).toSeq
-      eq <- ExactQualifier.getQualifiers(policy.intervals.map(IntervalUnit.withName), item.ts, dimKeys.zip(dimValues).toMap)
+      eq <- ExactQualifier.getQualifiersExtend(policy.intervals, item.ts, dimKeys.zip(dimValues).toMap)
     } yield {
       eq -> item.value
     }
