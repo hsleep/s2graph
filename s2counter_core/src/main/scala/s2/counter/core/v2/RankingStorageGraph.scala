@@ -14,7 +14,6 @@ import s2.util.{CollectionCache, CollectionCacheConfig}
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
-import scala.util.{Failure, Success, Try}
 import scala.util.hashing.MurmurHash3
 
 /**
@@ -82,42 +81,35 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
   override def update(values: Seq[(RankingKey, RankingValueMap)], k: Int): Unit = {
     val futures = {
       for {
-        (key, value) <- values
+        (key, value) <- values if checkAndPrepareDimensionBucket(key)
       } yield {
         // prepare dimension bucket edge
-        if (checkAndPrepareDimensionBucket(key)) {
-          val future = getEdges(key, "raw").flatMap { edges =>
-            val prevRankingSeq = toWithScoreLs(edges)
-            val prevRankingMap: Map[String, Double] = prevRankingSeq.groupBy(_._1).map(_._2.sortBy(-_._2).head)
-            val currentRankingMap: Map[String, Double] = value.mapValues(_.score)
-            val mergedRankingSeq = (prevRankingMap ++ currentRankingMap).toSeq.sortBy(-_._2).take(k)
-            val mergedRankingMap = mergedRankingSeq.toMap
+        val future = getEdges(key, "raw").flatMap { edges =>
+          val prevRankingSeq = toWithScoreLs(edges)
+          val prevRankingMap: Map[String, Double] = prevRankingSeq.groupBy(_._1).map(_._2.sortBy(-_._2).head)
+          val currentRankingMap: Map[String, Double] = value.mapValues(_.score)
+          val mergedRankingSeq = (prevRankingMap ++ currentRankingMap).toSeq.sortBy(-_._2).take(k)
+          val mergedRankingMap = mergedRankingSeq.toMap
 
-            val bucketRankingSeq = mergedRankingSeq.groupBy { case (itemId, score) =>
-              // 0-index
-              GraphUtil.transformHash(MurmurHash3.stringHash(itemId)) % BUCKET_SHARD_COUNT
-            }.map { case (shardIdx, groupedRanking) =>
-              shardIdx -> groupedRanking.filter { case (itemId, _) => currentRankingMap.contains(itemId) }
-            }.toSeq
+          val bucketRankingSeq = mergedRankingSeq.groupBy { case (itemId, score) =>
+            // 0-index
+            GraphUtil.transformHash(MurmurHash3.stringHash(itemId)) % BUCKET_SHARD_COUNT
+          }.map { case (shardIdx, groupedRanking) =>
+            shardIdx -> groupedRanking.filter { case (itemId, _) => currentRankingMap.contains(itemId) }
+          }.toSeq
 
-            insertBulk(key, bucketRankingSeq).flatMap { _ =>
-              val duplicatedItems = prevRankingMap.filterKeys(s => currentRankingMap.contains(s))
-              val cutoffItems = prevRankingMap.filterKeys(s => !mergedRankingMap.contains(s))
-              val deleteItems = duplicatedItems ++ cutoffItems
+          val duplicatedItems = prevRankingMap.filterKeys(s => currentRankingMap.contains(s))
+          val cutoffItems = prevRankingMap.filterKeys(s => !mergedRankingMap.contains(s))
+          val deleteItems = duplicatedItems ++ cutoffItems
 
-              val keyWithEdgesLs = prevRankingSeq.map(_._1).zip(edges)
-              val deleteEdges = keyWithEdgesLs.filter{ case (s, _) => deleteItems.contains(s) }.map(_._2)
+          val keyWithEdgesLs = prevRankingSeq.map(_._1).zip(edges)
+          val deleteEdges = keyWithEdgesLs.filter{ case (s, _) => deleteItems.contains(s) }.map(_._2)
 
-              deleteAll(deleteEdges)
-            }
+          insertBulk(key, bucketRankingSeq).flatMap { _ =>
+            deleteAll(deleteEdges)
           }
-
-          future
         }
-        else {
-          // do nothing
-          Future.successful(false)
-        }
+        future
       }
     }
 
@@ -164,7 +156,7 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
     }
 //    log.info(s"insertBulk: $payload")
 
-    wsClient.url(s"$s2graphUrl/graphs/edges/insertBulk").post(payload).map { resp =>
+    wsClient.url(s"$s2graphUrl/graphs/edges/insertWithWait").post(payload).map { resp =>
       resp.status match {
         case HttpStatus.SC_OK =>
           true
@@ -181,7 +173,7 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
         groupedEdges <- edges.grouped(50)
       } yield {
         val payload = Json.toJson(groupedEdges)
-        wsClient.url(s"$s2graphUrl/graphs/edges/delete").post(payload).map { resp =>
+        wsClient.url(s"$s2graphUrl/graphs/edges/deleteWithWait").post(payload).map { resp =>
           resp.status match {
             case HttpStatus.SC_OK =>
               true
@@ -209,63 +201,54 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
   private def getEdges(key: RankingKey, duplicate: String="first"): Future[List[JsValue]] = {
     val labelName = counterModel.findById(key.policyId).get.action + labelPostfix
 
-    val ids = {
-      (0 until BUCKET_SHARD_COUNT).map { shardIdx =>
-        s""""${makeBucketShardKey(shardIdx, key)}""""
+    val ids = for {
+      shardIdx <- 0 until BUCKET_SHARD_COUNT
+    } yield s"""${makeBucketShardKey(shardIdx, key)}"""
+
+    val payload = Json.obj(
+      "srcVertices" -> Json.arr(
+        Json.obj(
+          "serviceName" -> SERVICE_NAME,
+          "columnName" -> BUCKET_COLUMN_NAME,
+          "ids" -> ids
+        )
+      ),
+      "steps" -> Json.arr(
+        Json.obj(
+          "step" -> Json.arr(
+            Json.obj(
+              "label" -> labelName,
+              "duplicate" -> duplicate,
+              "direction" -> "out",
+              "offset" -> 0,
+              "limit" -> -1,
+              "cacheTTL" -> 5000,
+              "interval" -> Json.obj(
+                "from" -> Json.obj(
+                  "time_unit" -> key.eq.tq.q.toString,
+                  "time_value" -> key.eq.tq.ts
+                ),
+                "to" -> Json.obj(
+                  "time_unit" -> key.eq.tq.q.toString,
+                  "time_value" -> key.eq.tq.ts
+                ),
+                "scoring" -> Json.obj(
+                  "score" -> 1
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+
+    wsClient.url(s"$s2graphReadOnlyUrl/graphs/getEdges").post(payload).map { resp =>
+      resp.status match {
+        case HttpStatus.SC_OK =>
+          (resp.json \ "results").asOpt[List[JsValue]].getOrElse(Nil)
+        case _ =>
+          throw new RuntimeException(s"failed getEdges. errCode: ${resp.status}, body: ${resp.body}, query: $payload")
       }
-    }.mkString(",")
-
-    val strJs =
-      s"""
-         |{
-         |    "srcVertices": [
-         |        {
-         |            "serviceName": "$SERVICE_NAME",
-         |            "columnName": "$BUCKET_COLUMN_NAME",
-         |            "ids": [$ids]
-         |        }
-         |    ],
-         |    "steps": [
-         |        {
-         |            "step": [
-         |                {
-         |                    "label": "$labelName",
-         |                    "duplicate": "$duplicate",
-         |                    "direction": "out",
-         |                    "offset": 0,
-         |                    "limit": -1,
-         |                    "cacheTTL": 5000,
-         |                    "interval": {
-         |                      "from": {"time_unit": "${key.eq.tq.q.toString}", "time_value": ${key.eq.tq.ts}},
-         |                      "to": {"time_unit": "${key.eq.tq.q.toString}", "time_value": ${key.eq.tq.ts}}
-         |                    },
-         |                    "scoring": {"score": 1}
-         |                }
-         |            ]
-         |        }
-         |    ]
-         |}
-       """.stripMargin
-    log.debug(strJs)
-
-
-    Try {
-      Json.parse(strJs)
-    } match {
-      case Success(payload) =>
-        wsClient.url(s"$s2graphReadOnlyUrl/graphs/getEdges").post(payload).map { resp =>
-          resp.status match {
-            case HttpStatus.SC_OK =>
-              val results = (resp.json \ "results").asOpt[List[JsValue]].getOrElse(Nil)
-//              log.info(s"getEdges: $results")
-              results
-            case _ =>
-              throw new RuntimeException(s"failed getEdges. errCode: ${resp.status}, body: ${resp.body}, query: $payload")
-          }
-        }
-      case Failure(ex) =>
-        log.error(s"$ex")
-        Future.successful(Nil)
     }
   }
 
