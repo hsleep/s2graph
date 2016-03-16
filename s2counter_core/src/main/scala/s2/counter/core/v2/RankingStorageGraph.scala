@@ -150,7 +150,7 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
           "from" -> srcId,
           "to" -> itemId,
           "label" -> labelName,
-          "props" -> keyProps.+(("score", Json.toJson(score)))
+          "props" -> keyProps.++(Json.obj("score" -> Json.toJson(score), "_rep_" -> true))
         )
       }
     }
@@ -172,7 +172,11 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
       for {
         groupedEdges <- edges.grouped(50)
       } yield {
-        val payload = Json.toJson(groupedEdges)
+        val payload = Json.toJson(groupedEdges.map { case edge: JsObject =>
+          val newProps = (edge \ "props").as[JsObject] ++ Json.obj("_rep_" -> true)
+          log.info(s"delete edge props: $newProps")
+          edge ++ Json.obj("props" -> newProps)
+        })
         wsClient.url(s"$s2graphUrl/graphs/edges/deleteWithWait").post(payload).map { resp =>
           resp.status match {
             case HttpStatus.SC_OK =>
