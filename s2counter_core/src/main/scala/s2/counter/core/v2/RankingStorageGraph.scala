@@ -156,7 +156,7 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
     }
 //    log.info(s"insertBulk: $payload")
 
-    wsClient.url(s"$s2graphUrl/graphs/edges/insertWithWait").post(payload).map { resp =>
+    wsClient.url(s"$s2graphUrl/graphs/edges/insert").post(payload).map { resp =>
       resp.status match {
         case HttpStatus.SC_OK =>
           true
@@ -177,7 +177,7 @@ class RankingStorageGraph(config: Config) extends RankingStorage {
           log.info(s"delete edge props: $newProps")
           edge ++ Json.obj("props" -> newProps)
         })
-        wsClient.url(s"$s2graphUrl/graphs/edges/deleteWithWait").post(payload).map { resp =>
+        wsClient.url(s"$s2graphUrl/graphs/edges/delete").post(payload).map { resp =>
           resp.status match {
             case HttpStatus.SC_OK =>
               true
