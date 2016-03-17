@@ -44,4 +44,8 @@ class S2CounterConfig(config: Config) extends ConfigFunctions(config) {
   lazy val CACHE_TTL_SECONDS = getOrElse("cache.ttl.seconds", 600)
   lazy val CACHE_MAX_SIZE = getOrElse("cache.max.size", 10000)
   lazy val CACHE_NEGATIVE_TTL_SECONDS = getOrElse("cache.negative.ttl.seconds", CACHE_TTL_SECONDS)
+
+  // Counter
+  lazy val UPDATE_EXACT_BATCH_SIZE = getOrElse("exact.update.batch.size", 10)
+  lazy val UPDATE_RANK_BATCH_SIZE = getOrElse("rank.update.batch.size", 10)
 }

@@ -5,7 +5,7 @@ import kafka.producer.KeyedMessage
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{Accumulable, Logging}
 import play.api.libs.json.{JsNumber, JsString, JsValue, Json}
-import s2.config.{S2ConfigFactory, StreamingConfig}
+import s2.config.{S2ConfigFactory, S2CounterConfig, StreamingConfig}
 import s2.counter.TrxLog
 import s2.counter.core.ExactCounter.ExactValueMap
 import s2.counter.core.RankingCounter.RankingValueMap
@@ -26,6 +26,7 @@ object CounterFunctions extends Logging with WithKafka {
 
   private val K_MAX = 500
 
+  val counterConfig = new S2CounterConfig(S2ConfigFactory.config)
   val exactCounter = new ExactCounter(S2ConfigFactory.config, new ExactStorageGraph(S2ConfigFactory.config))
   val rankingCounter = new RankingCounter(S2ConfigFactory.config, new RankingStorageGraph(S2ConfigFactory.config))
 
@@ -392,7 +393,7 @@ object CounterFunctions extends Logging with WithKafka {
 
     for {
       (policy, allCounts) <- countsByPolicy
-      counts <- allCounts.grouped(10)
+      counts <- allCounts.grouped(counterConfig.UPDATE_EXACT_BATCH_SIZE)
       trxLog <- exactCounter.updateCount(policy, counts)
     } yield {
       trxLog.success match {
@@ -428,7 +429,7 @@ object CounterFunctions extends Logging with WithKafka {
 
     for {
       (policy, allValues) <- valuesByPolicy
-      groupedValues <- allValues.grouped(10)
+      groupedValues <- allValues.grouped(counterConfig.UPDATE_RANK_BATCH_SIZE)
     } {
       rankingCounter.update(groupedValues, K_MAX)
       acc += (s"RankingV${policy.version}", groupedValues.length)
